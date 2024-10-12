@@ -1,10 +1,11 @@
 /*
-history:
-016/0203 tcppipe v1
-021/0223 otp
-021/0428 AuthTrigger
 
-GoFmt GoBuildNull GoBuild GoRelease
+go get -a -u -v
+go mod tidy
+
+GoFmt
+GoBuildNull
+
 */
 
 package main
@@ -20,8 +21,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -34,30 +37,33 @@ const (
 	MaxPasswordLength  = 100
 	AskPasswordTimeout = 2 * time.Second
 
-	NewPasswordCharSet = "0123456789abcdedfghjkmnpqrstvwxyz"
-	NewPasswordLength  = 40
+	TcpTimeoutStringDefault = "60s"
+
+	NewPasswordCharSet  = "0123456789abcdedfghjkmnpqrstvwxyz"
+	NewPasswordLength   = 40
+	NewPasswordListSize = 12
 
 	Usage = `
-Creates tcp pipe for an ip address after a valid otp sent to the socket.
-Usage: tcpotp acceptAddr dialAddr
-Example: tcpotp :9022 127.1:22
-Example: tcpotp :5432 10.0.0.1:5432
-Env vars:
-	Timeout [30s] - timeout for tcp connections and between dials
+creates tcp pipe for an ip address after a valid otp sent to the socket.
+usage: tcpotp acceptAddr dialAddr
+example: tcpotp :9022 127.1:22
+example: tcpotp :5432 10.0.0.1:5432
+env vars (default value in square brackets):
+	TcpTimeout [60s] - timeout for tcp connections and between dials
 	OtpPipeLifetime [1h] - lifetime of a pipe after a successful otp validation
 	OtpListPath [otp.list.text] - path to otp list file
 	OtpLogPath [otp.log.text] - path to otp usage log file
 	AuthTrigger - optional path to a program to run on every successful auth
 	TgToken - telegram api token
-	TgLogChatIds - list of chat ids to log auth events (like "123,-321")
-	TgBossChatIds - list of chat ids to send new passwords to (like "456")
+	TgLogChatIds - list of chat ids to log auth events (example: "123,-321")
+	TgBossChatIds - list of chat ids to send new passwords to (example: "456")
 	TgLogPrefix - prefix for every auth event log
 	TgLogSuffix - suffix for every auth event log
 `
 )
 
 var (
-	Timeout time.Duration
+	TcpTimeout time.Duration
 
 	OtpListPath     string
 	OtpLogPath      string
@@ -73,19 +79,14 @@ var (
 	TgDisableNotification = true
 )
 
-func log(msg string, args ...interface{}) {
-	const Beat = time.Duration(24) * time.Hour / 1000
-	tzBiel := time.FixedZone("Biel", 60*60)
-	t := time.Now().In(tzBiel)
-	ty := t.Sub(time.Date(t.Year(), 1, 1, 0, 0, 0, 0, tzBiel))
-	td := t.Sub(time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, tzBiel))
+func log(msg interface{}, args ...interface{}) {
+	t := time.Now().Local()
 	ts := fmt.Sprintf(
-		"%d/%d@%d",
-		t.Year()%1000,
-		int(ty/(time.Duration(24)*time.Hour))+1,
-		int(td/Beat),
+		"%03d."+"%02d%02d."+"%02d"+"%02d.",
+		t.Year()%1000, t.Month(), t.Day(), t.Hour(), t.Minute(),
 	)
-	fmt.Fprintf(os.Stderr, ts+" "+msg+"\n", args...)
+	msgtext := fmt.Sprintf("%s %s", ts, msg) + NL
+	fmt.Fprintf(os.Stderr, msgtext, args...)
 }
 
 func tglog(msg string, chatids []int) error {
@@ -251,7 +252,7 @@ func checkNumValidOtp() {
 		log("%v", err)
 		os.Exit(1)
 	} else {
-		log("Number of valid one time passwords available: %d", numvalidotp)
+		log("count of valid one time passwords available: %d", numvalidotp)
 		if numvalidotp == 0 {
 			if err := genNewOtp(); err != nil {
 				log("%v", err)
@@ -263,7 +264,7 @@ func checkNumValidOtp() {
 
 func genNewOtp() error {
 	var pp []string
-	for i := 0; i < 10; i++ {
+	for i := 0; i < NewPasswordListSize; i++ {
 		p := newpass()
 		pp = append(pp, p)
 	}
@@ -286,13 +287,13 @@ func genNewOtp() error {
 	}
 
 	err = tglog(fmt.Sprintf(
-		"No valid one-time passwords left.\nMore one-time passwords:\n%s",
+		"no valid one-time passwords left.\nmore one-time passwords:\n%s",
 		pps,
 	), TgBossChatIds)
 	if err != nil {
 		return err
 	}
-	log("Sent more one-time passwords to %s", TgBossChatIds)
+	log("sent more one-time passwords to %+v", TgBossChatIds)
 
 	return nil
 }
@@ -387,7 +388,7 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 	go func(allow chan bool, l net.Listener, connch chan *net.Conn) {
 		for {
 			<-allow
-			l.(*net.TCPListener).SetDeadline(time.Now().Add(Timeout))
+			l.(*net.TCPListener).SetDeadline(time.Now().Add(TcpTimeout))
 			conn, err := l.Accept()
 			if err == nil {
 				if isValidInConn(&conn) {
@@ -458,18 +459,18 @@ func init() {
 	rand.Seed(time.Now().Unix())
 
 	if len(os.Args) != 3 {
-		fmt.Printf("Args: %+v\n", os.Args)
+		fmt.Printf("args: %+v\n", os.Args)
 		fmt.Print(Usage)
 		os.Exit(1)
 	}
 
-	TimeoutString := os.Getenv("Timeout")
-	if TimeoutString == "" {
-		TimeoutString = "30s"
+	TcpTimeoutString := os.Getenv("TcpTimeout")
+	if TcpTimeoutString == "" {
+		TcpTimeoutString = TcpTimeoutStringDefault
 	}
-	Timeout, err = time.ParseDuration(TimeoutString)
+	TcpTimeout, err = time.ParseDuration(TcpTimeoutString)
 	if err != nil {
-		log("ERROR Parse Timeout duration: %v", err)
+		log("ERROR parse TcpTimeout duration: %v", err)
 		os.Exit(1)
 	}
 
@@ -479,7 +480,7 @@ func init() {
 	}
 	OtpPipeLifetime, err = time.ParseDuration(OtpPipeLifetimeString)
 	if err != nil {
-		log("ERROR Parse OtpPipeLifetime duration: %v", err)
+		log("ERROR parse OtpPipeLifetime duration: %v", err)
 		os.Exit(1)
 	}
 
@@ -494,7 +495,7 @@ func init() {
 
 	TgToken = os.Getenv("TgToken")
 	if TgToken == "" {
-		log("WARNING Empty TgToken env var")
+		log("WARNING empty TgToken env var")
 	}
 
 	for _, i := range strings.Split(os.Getenv("TgLogChatId"), ",") {
@@ -508,7 +509,7 @@ func init() {
 		TgLogChatIds = append(TgLogChatIds, chatid)
 	}
 	if len(TgLogChatIds) == 0 {
-		log("WARNING Empty or invalid TgLogChatId env var")
+		log("WARNING empty or invalid TgLogChatId env var")
 	}
 
 	for _, i := range strings.Split(os.Getenv("TgBossChatId"), ",") {
@@ -517,12 +518,12 @@ func init() {
 		}
 		chatid, err := strconv.Atoi(i)
 		if err != nil || chatid == 0 {
-			log("WARNING Invalid chat id `%s`", i)
+			log("WARNING invalid chat id `%s`", i)
 		}
 		TgBossChatIds = append(TgBossChatIds, chatid)
 	}
 	if len(TgBossChatIds) == 0 {
-		log("WARNING Empty or invalid TgBossChatId env var")
+		log("WARNING empty or invalid TgBossChatId env var")
 	}
 
 	TgLogPrefix = os.Getenv("TgLogPrefix")
@@ -552,6 +553,14 @@ func main() {
 		log("ERROR %v", err)
 		os.Exit(1)
 	}
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-sigs
+		log("signal `%s` received. exiting.", s)
+		os.Exit(0)
+	}()
 
 	for {
 		al1 <- true
@@ -586,11 +595,11 @@ type timeoutConn struct {
 }
 
 func (c timeoutConn) Read(buf []byte) (int, error) {
-	c.Conn.SetReadDeadline(time.Now().Add(Timeout))
+	c.Conn.SetReadDeadline(time.Now().Add(TcpTimeout))
 	return c.Conn.Read(buf)
 }
 
 func (c timeoutConn) Write(buf []byte) (int, error) {
-	c.Conn.SetWriteDeadline(time.Now().Add(Timeout))
+	c.Conn.SetWriteDeadline(time.Now().Add(TcpTimeout))
 	return c.Conn.Write(buf)
 }
