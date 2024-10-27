@@ -79,6 +79,143 @@ var (
 	TgDisableNotification = true
 )
 
+func init() {
+	var err error
+
+	rand.Seed(time.Now().Unix())
+
+	if len(os.Args) != 3 {
+		fmt.Printf("args: %+v\n", os.Args)
+		fmt.Print(Usage)
+		os.Exit(1)
+	}
+
+	TcpTimeoutString := os.Getenv("TcpTimeout")
+	if TcpTimeoutString == "" {
+		TcpTimeoutString = TcpTimeoutStringDefault
+	}
+	TcpTimeout, err = time.ParseDuration(TcpTimeoutString)
+	if err != nil {
+		log("ERROR parse TcpTimeout duration: %v", err)
+		os.Exit(1)
+	}
+
+	OtpPipeLifetimeString := os.Getenv("OtpPipeLifetime")
+	if OtpPipeLifetimeString == "" {
+		OtpPipeLifetimeString = "1h"
+	}
+	OtpPipeLifetime, err = time.ParseDuration(OtpPipeLifetimeString)
+	if err != nil {
+		log("ERROR parse OtpPipeLifetime duration: %v", err)
+		os.Exit(1)
+	}
+
+	OtpListPath = os.Getenv("OtpListPath")
+	if OtpListPath == "" {
+		OtpListPath = "otp.list.text"
+	}
+	OtpLogPath = os.Getenv("OtpLogPath")
+	if OtpLogPath == "" {
+		OtpLogPath = "otp.log.text"
+	}
+
+	TgToken = os.Getenv("TgToken")
+	if TgToken == "" {
+		log("WARNING empty TgToken env var")
+	}
+
+	for _, i := range strings.Split(os.Getenv("TgLogChatId"), ",") {
+		if i == "" {
+			continue
+		}
+		chatid, err := strconv.Atoi(i)
+		if err != nil || chatid == 0 {
+			log("WARNING Invalid chat id `%s`", i)
+		}
+		TgLogChatIds = append(TgLogChatIds, chatid)
+	}
+	if len(TgLogChatIds) == 0 {
+		log("WARNING empty or invalid TgLogChatId env var")
+	}
+
+	for _, i := range strings.Split(os.Getenv("TgBossChatId"), ",") {
+		if i == "" {
+			continue
+		}
+		chatid, err := strconv.Atoi(i)
+		if err != nil || chatid == 0 {
+			log("WARNING invalid chat id `%s`", i)
+		}
+		TgBossChatIds = append(TgBossChatIds, chatid)
+	}
+	if len(TgBossChatIds) == 0 {
+		log("WARNING empty or invalid TgBossChatId env var")
+	}
+
+	TgLogPrefix = os.Getenv("TgLogPrefix")
+	TgLogSuffix = os.Getenv("TgLogSuffix")
+
+	AuthTrigger = os.Getenv("AuthTrigger")
+}
+
+func main() {
+	var err error
+
+	if _, err := getOtpList(); err != nil {
+		log("%v", err)
+		os.Exit(1)
+	}
+
+	checkNumValidOtp()
+
+	addr1, addr2 := os.Args[1], os.Args[2]
+	al1, ch1, err := allowAccept(addr1)
+	if err != nil {
+		log("ERROR %v", err)
+		os.Exit(1)
+	}
+	al2, ch2, err := allowDial(addr2)
+	if err != nil {
+		log("ERROR %v", err)
+		os.Exit(1)
+	}
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-sigs
+		log("signal `%s` received. exiting.", s)
+		os.Exit(0)
+	}()
+
+	for {
+		al1 <- true
+		conn1 := <-ch1
+		if conn1 == nil {
+			continue
+		}
+		log("remote:%s local:%s ->", (*conn1).RemoteAddr(), (*conn1).LocalAddr())
+
+		go func(conn1 *net.Conn) {
+			defer (*conn1).Close()
+
+			al2 <- true
+			conn2 := <-ch2
+			if conn2 == nil {
+				return
+			}
+			log("remote:%s local:%s -> local:%s remote:%s", (*conn1).RemoteAddr(), (*conn1).LocalAddr(), (*conn2).LocalAddr(), (*conn2).RemoteAddr())
+
+			defer (*conn2).Close()
+
+			tconn1 := timeoutConn{*conn1}
+			tconn2 := timeoutConn{*conn2}
+			go io.Copy(*conn2, tconn1)
+			io.Copy(*conn1, tconn2)
+		}(conn1)
+	}
+}
+
 func log(msg interface{}, args ...interface{}) {
 	t := time.Now().Local()
 	ts := fmt.Sprintf(
@@ -451,143 +588,6 @@ func allowDial(addr string) (allow chan bool, connch chan *net.Conn, err error) 
 		}
 	}(allow, addr, connch)
 	return
-}
-
-func init() {
-	var err error
-
-	rand.Seed(time.Now().Unix())
-
-	if len(os.Args) != 3 {
-		fmt.Printf("args: %+v\n", os.Args)
-		fmt.Print(Usage)
-		os.Exit(1)
-	}
-
-	TcpTimeoutString := os.Getenv("TcpTimeout")
-	if TcpTimeoutString == "" {
-		TcpTimeoutString = TcpTimeoutStringDefault
-	}
-	TcpTimeout, err = time.ParseDuration(TcpTimeoutString)
-	if err != nil {
-		log("ERROR parse TcpTimeout duration: %v", err)
-		os.Exit(1)
-	}
-
-	OtpPipeLifetimeString := os.Getenv("OtpPipeLifetime")
-	if OtpPipeLifetimeString == "" {
-		OtpPipeLifetimeString = "1h"
-	}
-	OtpPipeLifetime, err = time.ParseDuration(OtpPipeLifetimeString)
-	if err != nil {
-		log("ERROR parse OtpPipeLifetime duration: %v", err)
-		os.Exit(1)
-	}
-
-	OtpListPath = os.Getenv("OtpListPath")
-	if OtpListPath == "" {
-		OtpListPath = "otp.list.text"
-	}
-	OtpLogPath = os.Getenv("OtpLogPath")
-	if OtpLogPath == "" {
-		OtpLogPath = "otp.log.text"
-	}
-
-	TgToken = os.Getenv("TgToken")
-	if TgToken == "" {
-		log("WARNING empty TgToken env var")
-	}
-
-	for _, i := range strings.Split(os.Getenv("TgLogChatId"), ",") {
-		if i == "" {
-			continue
-		}
-		chatid, err := strconv.Atoi(i)
-		if err != nil || chatid == 0 {
-			log("WARNING Invalid chat id `%s`", i)
-		}
-		TgLogChatIds = append(TgLogChatIds, chatid)
-	}
-	if len(TgLogChatIds) == 0 {
-		log("WARNING empty or invalid TgLogChatId env var")
-	}
-
-	for _, i := range strings.Split(os.Getenv("TgBossChatId"), ",") {
-		if i == "" {
-			continue
-		}
-		chatid, err := strconv.Atoi(i)
-		if err != nil || chatid == 0 {
-			log("WARNING invalid chat id `%s`", i)
-		}
-		TgBossChatIds = append(TgBossChatIds, chatid)
-	}
-	if len(TgBossChatIds) == 0 {
-		log("WARNING empty or invalid TgBossChatId env var")
-	}
-
-	TgLogPrefix = os.Getenv("TgLogPrefix")
-	TgLogSuffix = os.Getenv("TgLogSuffix")
-
-	AuthTrigger = os.Getenv("AuthTrigger")
-}
-
-func main() {
-	var err error
-
-	if _, err := getOtpList(); err != nil {
-		log("%v", err)
-		os.Exit(1)
-	}
-
-	checkNumValidOtp()
-
-	addr1, addr2 := os.Args[1], os.Args[2]
-	al1, ch1, err := allowAccept(addr1)
-	if err != nil {
-		log("ERROR %v", err)
-		os.Exit(1)
-	}
-	al2, ch2, err := allowDial(addr2)
-	if err != nil {
-		log("ERROR %v", err)
-		os.Exit(1)
-	}
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		s := <-sigs
-		log("signal `%s` received. exiting.", s)
-		os.Exit(0)
-	}()
-
-	for {
-		al1 <- true
-		conn1 := <-ch1
-		if conn1 == nil {
-			continue
-		}
-		log("remote:%s local:%s ->", (*conn1).RemoteAddr(), (*conn1).LocalAddr())
-
-		go func(conn1 *net.Conn) {
-			defer (*conn1).Close()
-
-			al2 <- true
-			conn2 := <-ch2
-			if conn2 == nil {
-				return
-			}
-			log("remote:%s local:%s -> local:%s remote:%s", (*conn1).RemoteAddr(), (*conn1).LocalAddr(), (*conn2).LocalAddr(), (*conn2).RemoteAddr())
-
-			defer (*conn2).Close()
-
-			tconn1 := timeoutConn{*conn1}
-			tconn2 := timeoutConn{*conn2}
-			go io.Copy(*conn2, tconn1)
-			io.Copy(*conn1, tconn2)
-		}(conn1)
-	}
 }
 
 type timeoutConn struct {

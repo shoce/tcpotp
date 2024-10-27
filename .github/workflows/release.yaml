@@ -15,12 +15,12 @@ jobs:
   build-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
       - name: version
         run: |
-          VERSION=$( date '+%y%m%d.%H%M.0' )
+          VERSION=$( date '+%y.%m%d.%H%M' )
           echo "VERSION:$VERSION"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+      - uses: actions/checkout@v4
       - uses: actions/setup-go@v4
         with:
           # https://go.dev/dl
