@@ -1,6 +1,6 @@
 /*
 
-go get -a -u -v
+go get -u -v
 go mod tidy
 
 GoFmt
