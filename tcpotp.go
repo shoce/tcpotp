@@ -1,8 +1,6 @@
 /*
 
-go get -u -v
-go mod tidy
-
+GoGet
 GoFmt
 GoBuildNull
 
@@ -20,7 +18,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -53,7 +50,6 @@ env vars (default value in square brackets):
 	OtpPipeLifetime [1h] - lifetime of a pipe after a successful otp validation
 	OtpListPath [otp.list.text] - path to otp list file
 	OtpLogPath [otp.log.text] - path to otp usage log file
-	AuthTrigger - optional path to a program to run on every successful auth
 	TgToken - telegram api token
 	TgLogChatIds - list of chat ids to log auth events (example: "123,-321")
 	TgBossChatIds - list of chat ids to send new passwords to (example: "456")
@@ -68,7 +64,6 @@ var (
 	OtpListPath     string
 	OtpLogPath      string
 	OtpPipeLifetime time.Duration
-	AuthTrigger     string
 
 	TgToken               string
 	TgLogChatIds          []int
@@ -154,8 +149,6 @@ func init() {
 
 	TgLogPrefix = os.Getenv("TgLogPrefix")
 	TgLogSuffix = os.Getenv("TgLogSuffix")
-
-	AuthTrigger = os.Getenv("AuthTrigger")
 }
 
 func main() {
@@ -548,21 +541,6 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 						if err := conn.SetWriteDeadline(time.Now().UTC().Add(10 * time.Second)); err == nil {
 							conn.Write([]byte(authmsg + NL))
 						}
-						go func() {
-							if AuthTrigger == "" {
-								return
-							}
-
-							// Run AuthTrigger in background
-							output, err := exec.Command("/bin/sh", "-c", AuthTrigger).CombinedOutput()
-							if err != nil {
-								log("AuthTrigger `%s` CombinedOutput: %v", AuthTrigger, err)
-								return
-							}
-							outputmsg := fmt.Sprintf("AuthTrigger:\n%s", output)
-							log(outputmsg)
-							tglog(outputmsg, TgLogChatIds)
-						}()
 					}
 					conn.Close()
 				}
