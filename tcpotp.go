@@ -1,8 +1,6 @@
 /*
 
-GoGet
-GoFmt
-GoBuildNull
+GoGet GoFmt GoBuildNull
 
 */
 

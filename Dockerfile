@@ -1,6 +1,6 @@
 
 # https://hub.docker.com/_/golang/tags
-FROM golang:1.24.2 AS build
+FROM golang:1.24.4 AS build
 RUN mkdir -p /root/tcpotp/
 COPY tcpotp.go go.mod /root/tcpotp/
 RUN go version
