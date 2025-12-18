@@ -544,6 +544,18 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 				continue
 			}
 
+			// TODO inside askPassInConn
+			remoteAddrSeen := false
+			OtpLog, err := getOtpLog()
+			if err != nil {
+				log("ERROR allowAccept remoteAddrSeen get otp log %v", err)
+			}
+			for _, r := range OtpLog {
+				if r.Addr == remoteAddr {
+					remoteAddrSeen = true
+				}
+			}
+
 			log("DEBUG asking for password from remote [%s]", remoteAddr)
 			pw, err := askPassInConn(&conn)
 			if err != nil {
@@ -559,13 +571,6 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 				remoteAddr, pw, int(OtpPipeLifetime.Minutes()),
 			)
 
-			remoteAddrSeen := false
-			OtpLog, _ := getOtpLog()
-			for _, r := range OtpLog {
-				if r.Addr == remoteAddr {
-					remoteAddrSeen = true
-				}
-			}
 			if !remoteAddrSeen {
 				authmsg += "WARNING NEW IP ADDRESS" + NL
 			}
