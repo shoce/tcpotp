@@ -450,15 +450,15 @@ func isValidInConn(conn *net.Conn) bool {
 	return false
 }
 
-func askPassInConn(conn *net.Conn) (pw string, err error) {
+func askPassInConn(conn *net.Conn) (pw string, remoteAddrSeen bool, err error) {
 	passwordBytes := make([]byte, MaxPasswordLength)
 	err = (*conn).SetReadDeadline(time.Now().Add(AskPasswordTimeout))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	_, err = (*conn).Read(passwordBytes)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	password := strings.TrimSpace(string(bytes.TrimRight(passwordBytes, "\x00")))
 
@@ -467,20 +467,28 @@ func askPassInConn(conn *net.Conn) (pw string, err error) {
 
 	OtpLog, err := getOtpLog()
 	if err != nil {
-		return "", fmt.Errorf("get otp log %v", err)
+		return "", false, fmt.Errorf("get otp log %v", err)
 	}
+
 	for _, r := range OtpLog {
 		if password == r.Password {
-			return "", fmt.Errorf("password [%s] was used before by remote [%s]", password, r.Addr)
+			return "", false, fmt.Errorf("password [%s] was used before by remote [%s]", password, r.Addr)
+		}
+	}
+
+	remoteAddrSeen = false
+	for _, r := range OtpLog {
+		if r.Addr == remoteAddr {
+			remoteAddrSeen = true
 		}
 	}
 
 	OtpList, err := getOtpList()
 	if err != nil {
-		return "", err
+		return "", remoteAddrSeen, err
 	}
 	if len(OtpList) == 0 {
-		return "", fmt.Errorf("empty otp list")
+		return "", remoteAddrSeen, fmt.Errorf("empty otp list")
 	}
 
 	for _, p := range OtpList {
@@ -490,7 +498,7 @@ func askPassInConn(conn *net.Conn) (pw string, err error) {
 
 		OtpLogFile, err := os.OpenFile(OtpLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
-			return "", err
+			return "", remoteAddrSeen, err
 		}
 		otprecord := fmt.Sprintf(
 			"%s"+TAB+"%s"+TAB+"%s"+NL,
@@ -498,22 +506,22 @@ func askPassInConn(conn *net.Conn) (pw string, err error) {
 		)
 		if _, err := OtpLogFile.Write([]byte(otprecord)); err != nil {
 			OtpLogFile.Close()
-			return "", err
+			return "", remoteAddrSeen, err
 		}
 		if err := OtpLogFile.Sync(); err != nil {
 			OtpLogFile.Close()
-			return "", err
+			return "", remoteAddrSeen, err
 		}
 		if err := OtpLogFile.Close(); err != nil {
-			return "", err
+			return "", remoteAddrSeen, err
 		}
 
 		checkNumValidOtp()
 
-		return password, nil
+		return password, remoteAddrSeen, nil
 	}
 
-	return "", fmt.Errorf("invalid password [%s]", strings.ReplaceAll(password, NL, "<NL>"))
+	return "", remoteAddrSeen, fmt.Errorf("invalid password [%s]", strings.ReplaceAll(password, NL, "<NL>"))
 }
 
 func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error) {
@@ -544,20 +552,8 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 				continue
 			}
 
-			// TODO inside askPassInConn
-			remoteAddrSeen := false
-			OtpLog, err := getOtpLog()
-			if err != nil {
-				log("ERROR allowAccept remoteAddrSeen get otp log %v", err)
-			}
-			for _, r := range OtpLog {
-				if r.Addr == remoteAddr {
-					remoteAddrSeen = true
-				}
-			}
-
 			log("DEBUG asking for password from remote [%s]", remoteAddr)
-			pw, err := askPassInConn(&conn)
+			pw, remoteAddrSeen, err := askPassInConn(&conn)
 			if err != nil {
 				log("ERROR asking for password from remote [%s] %v", remoteAddr, err)
 				connch <- nil
