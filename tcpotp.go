@@ -164,6 +164,7 @@ func main() {
 	checkNumValidOtp()
 
 	addr1, addr2 := os.Args[1], os.Args[2]
+
 	al1, ch1, err := allowAccept(addr1)
 	if err != nil {
 		log("ERROR allowAccept %v", err)
@@ -525,10 +526,12 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 	go func(allow chan bool, l net.Listener, connch chan *net.Conn) {
 		for {
 			<-allow
+
 			l.(*net.TCPListener).SetDeadline(time.Now().Add(TcpTimeout))
 			conn, err := l.Accept()
 			if err != nil {
 				log("ERROR accept incoming connection %v", err)
+				connch <- nil
 				continue
 			}
 
@@ -545,6 +548,7 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 			pw, err := askPassInConn(&conn)
 			if err != nil {
 				log("ERROR asking for password from remote [%s] %v", remoteAddr, err)
+				connch <- nil
 				continue
 			}
 
