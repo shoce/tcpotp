@@ -53,6 +53,8 @@ env vars (default value in square brackets):
 )
 
 var (
+	DEBUG bool
+
 	TcpTimeout time.Duration
 
 	OtpListPath     string
@@ -77,6 +79,10 @@ func init() {
 		log("args %+v\n", os.Args)
 		log("%s", Usage)
 		os.Exit(1)
+	}
+
+	if os.Getenv("DEBUG") != "" {
+		DEBUG = true
 	}
 
 	TcpTimeoutString := os.Getenv("TcpTimeout")
@@ -170,14 +176,18 @@ func main() {
 		log("ERROR allowAccept %v", err)
 		os.Exit(1)
 	}
-	log("started goroutine to accept incoming connections")
+	if DEBUG {
+		log("DEBUG started goroutine to accept incoming connections")
+	}
 
 	al2, ch2, err := allowDial(addr2)
 	if err != nil {
 		log("ERROR allowDial %v", err)
 		os.Exit(1)
 	}
-	log("started goroutine to dial outcoming connections")
+	if DEBUG {
+		log("DEBUG started goroutine to dial outcoming connections")
+	}
 
 	for {
 		al1 <- true
@@ -544,15 +554,21 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 			}
 
 			remoteAddr := getRemoteAddr(&conn)
-			log("DEBUG accepted incoming connection from remote [%s]", remoteAddr)
+			if DEBUG {
+				log("DEBUG accepted incoming connection from remote [%s]", remoteAddr)
+			}
 
 			if isValidInConn(&conn) {
-				log("DEBUG valid incoming connection from remote [%s]", remoteAddr)
+				if DEBUG {
+					log("DEBUG valid incoming connection from remote [%s]", remoteAddr)
+				}
 				connch <- &conn
 				continue
 			}
 
-			log("DEBUG asking for password from remote [%s]", remoteAddr)
+			if DEBUG {
+				log("DEBUG asking for password from remote [%s]", remoteAddr)
+			}
 			pw, remoteAddrSeen, err := askPassInConn(&conn)
 			if err != nil {
 				log("ERROR asking for password from remote [%s] %v", remoteAddr, err)
