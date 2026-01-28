@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	SP  = " "
 	TAB = "\t"
 	NL  = "\n"
 
@@ -596,6 +597,17 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 			}
 
 			conn.Close()
+
+			time.AfterFunc(OtpPipeLifetime, func() {
+				finmsg := fmt.Sprintf(
+					"ip address %s session finished"+NL,
+					remoteAddr,
+				)
+				log(finmsg)
+				if err := tglog(finmsg, TgLogChatIds); err != nil {
+					log("ERROR tglog %v", err)
+				}
+			})
 
 			connch <- nil
 		}
