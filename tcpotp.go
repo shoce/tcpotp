@@ -179,12 +179,13 @@ func main() {
 		os.Exit(1)
 	}
 	for _, r := range otplog {
-		if tillexpire := r.Expire.Sub(time.Now()); tillexpire > 0 {
-			raddr := r.Addr
-			time.AfterFunc(tillexpire, func() {
+		if tillExpire := r.Expire.Sub(time.Now()); tillExpire > 0 {
+			remoteAddr := r.Addr
+			perr("ip address %s session finishes in %v", remoteAddr, int(tillExpire.Minutes()))
+			time.AfterFunc(tillExpire, func() {
 				finmsg := fmt.Sprintf(
 					"ip address %s session finished"+NL,
-					raddr,
+					remoteAddr,
 				)
 				err := tglog(finmsg, TgLogChatIds)
 				if err != nil {
@@ -619,6 +620,7 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 
 			conn.Close()
 
+			perr("ip address %s session finishes in %v", remoteAddr, int(OtpPipeLifetime.Minutes()))
 			time.AfterFunc(OtpPipeLifetime, func() {
 				finmsg := fmt.Sprintf(
 					"ip address %s session finished"+NL,
