@@ -247,7 +247,7 @@ func perr(msg string, args ...interface{}) {
 	}
 	tnow := time.Now().Local()
 	ts := fmt.Sprintf(
-		"<%d:%02d%02d:%02d%02d>",
+		"<%03d:%02d%02d:%02d%02d>",
 		tnow.Year()%1000, tnow.Month(), tnow.Day(),
 		tnow.Hour(), tnow.Minute(),
 	)
