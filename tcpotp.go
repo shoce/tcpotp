@@ -24,12 +24,17 @@ const (
 	TAB = "\t"
 	NL  = "\n"
 
+	OtpListPathDef = "otp.list.text"
+	OtpLogPathDef  = "otp.log.text"
+
+	// TODO "2006:0102:1504"
 	TimestampLayout = "2006.0102.1504"
 
 	MaxPasswordLength  = 100
 	AskPasswordTimeout = 2 * time.Second
 
-	TcpTimeoutStringDefault = "60s"
+	OtpPipeLifetimeDef = 1 * time.Hour
+	TcpTimeoutDef      = 60 * time.Second
 
 	NewPasswordCharSet  = "0123456789abcdedfghjkmnpqrstvwxyz"
 	NewPasswordLength   = 40
@@ -43,8 +48,8 @@ example: tcpotp :5432 10.0.0.1:5432
 env vars (default value in square brackets):
 	TcpTimeout [60s] - timeout for tcp connections and between dials
 	OtpPipeLifetime [1h] - lifetime of a pipe after a successful otp validation
-	OtpListPath [otp.list.text] - path to otp list file
-	OtpLogPath [otp.log.text] - path to otp usage log file
+	OtpListPath [` + OtpListPathDef + `] - path to otp list file
+	OtpLogPath [` + OtpLogPathDef + `] - path to otp usage log file
 	TgToken - telegram api token
 	TgLogChatIds - list of chat ids to log auth events (example: "123,-321")
 	TgBossChatIds - list of chat ids to send new passwords to (example: "456")
@@ -77,8 +82,8 @@ func init() {
 	rand.Seed(time.Now().Unix())
 
 	if len(os.Args) != 3 {
-		log("args %+v\n", os.Args)
-		log("%s", Usage)
+		perr("args %+v"+NL, os.Args)
+		perr("%s", Usage)
 		os.Exit(1)
 	}
 
@@ -86,38 +91,38 @@ func init() {
 		DEBUG = true
 	}
 
-	TcpTimeoutString := os.Getenv("TcpTimeout")
-	if TcpTimeoutString == "" {
-		TcpTimeoutString = TcpTimeoutStringDefault
-	}
-	TcpTimeout, err = time.ParseDuration(TcpTimeoutString)
-	if err != nil {
-		log("ERROR parse TcpTimeout duration %v", err)
-		os.Exit(1)
+	if v := os.Getenv("TcpTimeout"); v != "" {
+		TcpTimeout, err = time.ParseDuration(v)
+		if err != nil {
+			perr("ERROR parse TcpTimeout duration %v", err)
+			os.Exit(1)
+		}
+	} else {
+		TcpTimeout = TcpTimeoutDef
 	}
 
-	OtpPipeLifetimeString := os.Getenv("OtpPipeLifetime")
-	if OtpPipeLifetimeString == "" {
-		OtpPipeLifetimeString = "1h"
-	}
-	OtpPipeLifetime, err = time.ParseDuration(OtpPipeLifetimeString)
-	if err != nil {
-		log("ERROR parse OtpPipeLifetime duration %v", err)
-		os.Exit(1)
+	if v := os.Getenv("OtpPipeLifetime"); v != "" {
+		OtpPipeLifetime, err = time.ParseDuration(v)
+		if err != nil {
+			perr("ERROR parse OtpPipeLifetime duration %v", err)
+			os.Exit(1)
+		}
+	} else {
+		OtpPipeLifetime = OtpPipeLifetimeDef
 	}
 
 	OtpListPath = os.Getenv("OtpListPath")
 	if OtpListPath == "" {
-		OtpListPath = "otp.list.text"
+		OtpListPath = OtpListPathDef
 	}
 	OtpLogPath = os.Getenv("OtpLogPath")
 	if OtpLogPath == "" {
-		OtpLogPath = "otp.log.text"
+		OtpLogPath = OtpLogPathDef
 	}
 
 	TgToken = os.Getenv("TgToken")
 	if TgToken == "" {
-		log("WARNING empty TgToken env var")
+		perr("WARNING empty TgToken env var")
 	}
 
 	for _, i := range strings.Split(os.Getenv("TgLogChatId"), ",") {
@@ -126,12 +131,12 @@ func init() {
 		}
 		chatid, err := strconv.Atoi(i)
 		if err != nil || chatid == 0 {
-			log("WARNING Invalid chat id [%s]", i)
+			perr("WARNING invalid TgLogChatId chat id [%s]", i)
 		}
 		TgLogChatIds = append(TgLogChatIds, chatid)
 	}
 	if len(TgLogChatIds) == 0 {
-		log("WARNING empty or invalid TgLogChatId env var")
+		perr("WARNING empty or invalid TgLogChatId env var")
 	}
 
 	for _, i := range strings.Split(os.Getenv("TgBossChatId"), ",") {
@@ -140,12 +145,12 @@ func init() {
 		}
 		chatid, err := strconv.Atoi(i)
 		if err != nil || chatid == 0 {
-			log("WARNING invalid chat id [%s]", i)
+			perr("WARNING invalid TgBossChatId chat id [%s]", i)
 		}
 		TgBossChatIds = append(TgBossChatIds, chatid)
 	}
 	if len(TgBossChatIds) == 0 {
-		log("WARNING empty or invalid TgBossChatId env var")
+		perr("WARNING empty or invalid TgBossChatId env var")
 	}
 
 	TgLogPrefix = os.Getenv("TgLogPrefix")
@@ -159,13 +164,34 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		s := <-sigs
-		log("signal [%s] received - exiting", s)
+		perr("signal [%s] received - exiting", s)
 		os.Exit(0)
 	}()
 
 	if _, err := getOtpList(); err != nil {
-		log("ERROR get otp list %v", err)
+		perr("ERROR get otp list %v", err)
 		os.Exit(1)
+	}
+
+	otplog, err := getOtpLog()
+	if err != nil {
+		perr("ERROR get otp log %v", err)
+		os.Exit(1)
+	}
+	for _, r := range otplog {
+		if tillexpire := r.Expire.Sub(time.Now()); tillexpire > 0 {
+			raddr := r.Addr
+			time.AfterFunc(tillexpire, func() {
+				finmsg := fmt.Sprintf(
+					"ip address %s session finished"+NL,
+					raddr,
+				)
+				err := tglog(finmsg, TgLogChatIds)
+				if err != nil {
+					perr("ERROR tglog %v", err)
+				}
+			})
+		}
 	}
 
 	checkNumValidOtp()
@@ -174,21 +200,17 @@ func main() {
 
 	al1, ch1, err := allowAccept(addr1)
 	if err != nil {
-		log("ERROR allowAccept %v", err)
+		perr("ERROR allowAccept [%s] %v", addr1, err)
 		os.Exit(1)
 	}
-	if DEBUG {
-		log("DEBUG started goroutine to accept incoming connections")
-	}
+	perr("DEBUG started goroutine to accept incoming connections")
 
 	al2, ch2, err := allowDial(addr2)
 	if err != nil {
-		log("ERROR allowDial %v", err)
+		perr("ERROR allowDial [%s] %v", addr2, err)
 		os.Exit(1)
 	}
-	if DEBUG {
-		log("DEBUG started goroutine to dial outcoming connections")
-	}
+	perr("DEBUG started goroutine to dial outcoming connections")
 
 	for {
 		al1 <- true
@@ -196,7 +218,7 @@ func main() {
 		if conn1 == nil {
 			continue
 		}
-		log("remote [%s] local [%s] ->", (*conn1).RemoteAddr(), (*conn1).LocalAddr())
+		perr("remote [%s] local [%s] ->", (*conn1).RemoteAddr(), (*conn1).LocalAddr())
 
 		go func(conn1 *net.Conn) {
 			defer (*conn1).Close()
@@ -206,7 +228,7 @@ func main() {
 			if conn2 == nil {
 				return
 			}
-			log("remote [%s] local [%s] -> local [%s] remote [%s]", (*conn1).RemoteAddr(), (*conn1).LocalAddr(), (*conn2).LocalAddr(), (*conn2).RemoteAddr())
+			perr("remote [%s] local [%s] -> local [%s] remote [%s]", (*conn1).RemoteAddr(), (*conn1).LocalAddr(), (*conn2).LocalAddr(), (*conn2).RemoteAddr())
 
 			defer (*conn2).Close()
 
@@ -218,17 +240,26 @@ func main() {
 	}
 }
 
-func log(msg interface{}, args ...interface{}) {
-	t := time.Now().Local()
+func perr(msg string, args ...interface{}) {
+	if strings.HasPrefix(msg, "DEBUG ") && !DEBUG {
+		return
+	}
+	tnow := time.Now().Local()
 	ts := fmt.Sprintf(
-		"%d%02d%02d:%02d%02d",
-		t.Year()%1000, t.Month(), t.Day(), t.Hour(), t.Minute(),
+		"<%d:%02d%02d:%02d%02d>",
+		tnow.Year()%1000, tnow.Month(), tnow.Day(),
+		tnow.Hour(), tnow.Minute(),
 	)
-	msgtext := fmt.Sprintf("%s %s", ts, msg) + NL
-	fmt.Fprintf(os.Stderr, msgtext, args...)
+	msgtext := msg
+	if len(args) > 0 {
+		msgtext = fmt.Sprintf(msg, args...)
+	}
+	fmt.Fprint(os.Stderr, ts+SP+msgtext+NL)
 }
 
-func tglog(msg string, chatids []int) error {
+func tglog(msgtext string, chatids []int) error {
+	perr(msgtext)
+
 	type TgSendMessageRequest struct {
 		ChatId              int64  `json:"chat_id"`
 		Text                string `json:"text"`
@@ -244,17 +275,12 @@ func tglog(msg string, chatids []int) error {
 		} `json:"result"`
 	}
 
-	if TgLogPrefix != "" {
-		msg = TgLogPrefix + msg
-	}
-	if TgLogSuffix != "" {
-		msg = msg + TgLogSuffix
-	}
+	msgtext = TgLogPrefix + msgtext + TgLogSuffix
 
 	for _, chatid := range chatids {
 		smreq := TgSendMessageRequest{
 			ChatId:              int64(chatid),
-			Text:                msg,
+			Text:                msgtext,
 			ParseMode:           TgParseMode,
 			DisableNotification: TgDisableNotification,
 		}
@@ -298,7 +324,7 @@ func getRemoteAddr(conn *net.Conn) string {
 
 func newpass() string {
 	var password strings.Builder
-	for i := 0; i < NewPasswordLength; i++ {
+	for range NewPasswordLength {
 		random := rand.Intn(len(NewPasswordCharSet))
 		password.WriteString(string(NewPasswordCharSet[random]))
 	}
@@ -308,7 +334,7 @@ func newpass() string {
 type OtpRecord struct {
 	Password string
 	Addr     string
-	Expires  time.Time
+	Expire   time.Time
 }
 
 func getOtpLog() ([]OtpRecord, error) {
@@ -328,12 +354,12 @@ func getOtpLog() ([]OtpRecord, error) {
 		}
 		rr := strings.Split(otprecord, TAB)
 		if len(rr) != 3 {
-			log("otp log record invalid [%s]", otprecord)
+			perr("otp log record invalid [%s]", otprecord)
 			continue
 		}
 		password, addr, expires := rr[0], rr[1], rr[2]
 		if exptime, err := time.Parse(TimestampLayout, expires); err != nil {
-			log("otp log record invalid expiration time [%s]", expires)
+			perr("otp log record invalid expiration time [%s]", expires)
 			continue
 		} else {
 			OtpLog = append(OtpLog, OtpRecord{password, addr, exptime})
@@ -387,23 +413,24 @@ func getNumValidOtp() (int, error) {
 }
 
 func checkNumValidOtp() {
-	if numvalidotp, err := getNumValidOtp(); err != nil {
-		log("%v", err)
+	numvalidotp, err := getNumValidOtp()
+	if err != nil {
+		perr("ERROR getNumValidOtp %v", err)
 		os.Exit(1)
-	} else {
-		log("count of valid one-time passwords available <%d>", numvalidotp)
-		if numvalidotp == 0 {
-			if err := genNewOtp(); err != nil {
-				log("%v", err)
-				os.Exit(1)
-			}
+	}
+	perr("count of valid one-time passwords available <%d>", numvalidotp)
+	if numvalidotp == 0 {
+		err := genNewOtp()
+		if err != nil {
+			perr("ERROR genNewOtp %v", err)
+			os.Exit(1)
 		}
 	}
 }
 
 func genNewOtp() error {
 	var pp []string
-	for i := 0; i < NewPasswordListSize; i++ {
+	for range NewPasswordListSize {
 		p := newpass()
 		pp = append(pp, p)
 	}
@@ -434,23 +461,23 @@ func genNewOtp() error {
 	if err = tglog(tgmsg, TgBossChatIds); err != nil {
 		return fmt.Errorf("tglog %v", err)
 	}
-	log("sent more one-time passwords to %+v", TgBossChatIds)
+	perr("sent more one-time passwords to %+v", TgBossChatIds)
 
 	return nil
 }
 
 func isValidInConn(conn *net.Conn) bool {
 	remoteAddr := getRemoteAddr(conn)
-	log("remote [%s]", remoteAddr)
+	perr("remote [%s]", remoteAddr)
 
 	OtpLog, err := getOtpLog()
 	if err != nil {
-		log("ERROR get otp log %v", err)
+		perr("ERROR get otp log %v", err)
 		return false
 	}
 
 	for _, r := range OtpLog {
-		if time.Now().After(r.Expires) {
+		if time.Now().After(r.Expire) {
 			continue
 		}
 		if remoteAddr == r.Addr {
@@ -474,7 +501,7 @@ func askPassInConn(conn *net.Conn) (pw string, remoteAddrSeen bool, err error) {
 	password := strings.TrimSpace(string(bytes.TrimRight(passwordBytes, "\x00")))
 
 	remoteAddr := getRemoteAddr(conn)
-	log("remote [%s] password [%s]", remoteAddr, strings.ReplaceAll(password, NL, "<NL>"))
+	perr("remote [%s] password [%s]", remoteAddr, strings.ReplaceAll(password, NL, "<NL>"))
 
 	OtpLog, err := getOtpLog()
 	if err != nil {
@@ -549,30 +576,24 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 			l.(*net.TCPListener).SetDeadline(time.Now().Add(TcpTimeout))
 			conn, err := l.Accept()
 			if err != nil {
-				log("ERROR accept incoming connection %v", err)
+				perr("ERROR accept incoming connection %v", err)
 				connch <- nil
 				continue
 			}
 
 			remoteAddr := getRemoteAddr(&conn)
-			if DEBUG {
-				log("DEBUG accepted incoming connection from remote [%s]", remoteAddr)
-			}
+			perr("DEBUG accepted incoming connection from remote [%s]", remoteAddr)
 
 			if isValidInConn(&conn) {
-				if DEBUG {
-					log("DEBUG valid incoming connection from remote [%s]", remoteAddr)
-				}
+				perr("DEBUG valid incoming connection from remote [%s]", remoteAddr)
 				connch <- &conn
 				continue
 			}
 
-			if DEBUG {
-				log("DEBUG asking for password from remote [%s]", remoteAddr)
-			}
+			perr("DEBUG asking for password from remote [%s]", remoteAddr)
 			pw, remoteAddrSeen, err := askPassInConn(&conn)
 			if err != nil {
-				log("ERROR asking for password from remote [%s] %v", remoteAddr, err)
+				perr("ERROR asking for password from remote [%s] %v", remoteAddr, err)
 				connch <- nil
 				continue
 			}
@@ -588,9 +609,9 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 				authmsg += "WARNING NEW IP ADDRESS" + NL
 			}
 
-			log(authmsg)
+			perr(authmsg)
 			if err := tglog(authmsg, TgLogChatIds); err != nil {
-				log("ERROR tglog %v", err)
+				perr("ERROR tglog %v", err)
 			}
 			if err := conn.SetWriteDeadline(time.Now().UTC().Add(11 * time.Second)); err == nil {
 				conn.Write([]byte(authmsg + NL))
@@ -603,9 +624,9 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 					"ip address %s session finished"+NL,
 					remoteAddr,
 				)
-				log(finmsg)
-				if err := tglog(finmsg, TgLogChatIds); err != nil {
-					log("ERROR tglog %v", err)
+				err := tglog(finmsg, TgLogChatIds)
+				if err != nil {
+					perr("ERROR tglog %v", err)
 				}
 			})
 
