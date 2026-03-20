@@ -41,6 +41,8 @@ const (
 	NewPasswordLength   = 40
 	NewPasswordListSize = 12
 
+	TgApiUrlDef = "https://api.telegram.org"
+
 	Usage = `
 creates tcp pipe for an ip address after a valid otp sent to the socket.
 usage: tcpotp acceptAddr dialAddr
@@ -68,6 +70,7 @@ var (
 	OtpLogPath      string
 	OtpPipeLifetime time.Duration
 
+	TgApiUrl              = TgApiUrlDef
 	TgToken               string
 	TgLogChatIds          []int
 	TgBossChatIds         []int
@@ -121,6 +124,11 @@ func init() {
 		OtpLogPath = OtpLogPathDef
 	}
 
+	if v := os.Getenv("TgApiUrl"); v != "" {
+		TgApiUrl = v
+	}
+	perr("TgApiUrl [%s]", TgApiUrl)
+
 	TgToken = os.Getenv("TgToken")
 	if TgToken == "" {
 		perr("WARNING empty TgToken env var")
@@ -155,7 +163,9 @@ func init() {
 	}
 
 	TgLogPrefix = os.Getenv("TgLogPrefix")
+	perr("TgLogPrefix [%s]", TgLogPrefix)
 	TgLogSuffix = os.Getenv("TgLogSuffix")
+	perr("TgLogSuffix [%s]", TgLogSuffix)
 }
 
 func main() {
@@ -302,7 +312,7 @@ func tglog(msgtext string, chatids []int) error {
 		smreqjsBuffer := bytes.NewBuffer(smreqjs)
 
 		var resp *http.Response
-		tgapiurl := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", TgToken)
+		tgapiurl := fmt.Sprintf(TgApiUrl+"/bot%s/sendMessage", TgToken)
 		resp, err = http.Post(
 			tgapiurl,
 			"application/json",
