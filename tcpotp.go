@@ -23,6 +23,7 @@ const (
 	SP  = " "
 	TAB = "\t"
 	NL  = "\n"
+	CR  = "\r"
 
 	OtpListPathDef = "otp.list.text"
 	OtpLogPathDef  = "otp.log.text"
@@ -181,14 +182,13 @@ func main() {
 	for _, r := range otplog {
 		if tillExpire := r.Expire.Sub(time.Now()); tillExpire > 0 {
 			remoteAddr := r.Addr
-			perr("ip address %s session finishes in %v", remoteAddr, int(tillExpire.Minutes()))
+			perr("ip address %s session finishes in %d minutes", remoteAddr, int(tillExpire.Minutes()))
 			time.AfterFunc(tillExpire, func() {
 				finmsg := fmt.Sprintf(
 					"ip address %s session finished"+NL,
 					remoteAddr,
 				)
-				err := tglog(finmsg, TgLogChatIds)
-				if err != nil {
+				if err := tglog(finmsg, TgLogChatIds); err != nil {
 					perr("ERROR tglog %v", err)
 				}
 			})
@@ -241,6 +241,13 @@ func main() {
 	}
 }
 
+func atonString(text string) string {
+	text = strings.ReplaceAll(text, CR, "<CR>")
+	text = strings.ReplaceAll(text, NL, "<NL>")
+	text = strings.ReplaceAll(text, "]", "\\]")
+	return text
+}
+
 func perr(msg string, args ...interface{}) {
 	if strings.HasPrefix(msg, "DEBUG ") && !DEBUG {
 		return
@@ -254,6 +261,9 @@ func perr(msg string, args ...interface{}) {
 	msgtext := msg
 	if len(args) > 0 {
 		msgtext = fmt.Sprintf(msg, args...)
+	}
+	if TgToken != "" {
+		msgtext = strings.ReplaceAll(msgtext, TgToken, "[TgToken]")
 	}
 	fmt.Fprint(os.Stderr, ts+SP+msgtext+NL)
 }
@@ -502,7 +512,7 @@ func askPassInConn(conn *net.Conn) (pw string, remoteAddrSeen bool, err error) {
 	password := strings.TrimSpace(string(bytes.TrimRight(passwordBytes, "\x00")))
 
 	remoteAddr := getRemoteAddr(conn)
-	perr("remote [%s] password [%s]", remoteAddr, strings.ReplaceAll(password, NL, "<NL>"))
+	perr("remote [%s] password [%s]", remoteAddr, atonString(password))
 
 	OtpLog, err := getOtpLog()
 	if err != nil {
@@ -560,7 +570,7 @@ func askPassInConn(conn *net.Conn) (pw string, remoteAddrSeen bool, err error) {
 		return password, remoteAddrSeen, nil
 	}
 
-	return "", remoteAddrSeen, fmt.Errorf("invalid password [%s]", strings.ReplaceAll(password, NL, "<NL>"))
+	return "", remoteAddrSeen, fmt.Errorf("invalid password [%s]", atonString(password))
 }
 
 func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error) {
@@ -610,24 +620,22 @@ func allowAccept(addr string) (allow chan bool, connch chan *net.Conn, err error
 				authmsg += "WARNING NEW IP ADDRESS" + NL
 			}
 
-			perr(authmsg)
-			if err := tglog(authmsg, TgLogChatIds); err != nil {
-				perr("ERROR tglog %v", err)
-			}
 			if err := conn.SetWriteDeadline(time.Now().UTC().Add(11 * time.Second)); err == nil {
 				conn.Write([]byte(authmsg + NL))
 			}
-
 			conn.Close()
 
-			perr("ip address %s session finishes in %v", remoteAddr, int(OtpPipeLifetime.Minutes()))
+			if err := tglog(authmsg, TgLogChatIds); err != nil {
+				perr("ERROR tglog %v", err)
+			}
+
+			perr("ip address %s session finishes in %d minutes", remoteAddr, int(OtpPipeLifetime.Minutes()))
 			time.AfterFunc(OtpPipeLifetime, func() {
 				finmsg := fmt.Sprintf(
 					"ip address %s session finished"+NL,
 					remoteAddr,
 				)
-				err := tglog(finmsg, TgLogChatIds)
-				if err != nil {
+				if err := tglog(finmsg, TgLogChatIds); err != nil {
 					perr("ERROR tglog %v", err)
 				}
 			})
